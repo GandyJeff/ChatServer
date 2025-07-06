@@ -2,7 +2,7 @@
 	"artifacts" : 
 	[
 		{
-			"path" : "/home/jeff/文档/Chat/bin/ChatClient"
+			"path" : "/home/jeff/文档/Chat/ChatServer/bin/ChatClient"
 		}
 	],
 	"backtrace" : 1,
@@ -76,34 +76,34 @@
 			"compileCommandFragments" : 
 			[
 				{
-					"fragment" : "-g -g  "
+					"fragment" : "-g  "
 				}
 			],
 			"includes" : 
 			[
 				{
 					"backtrace" : 3,
-					"path" : "/home/jeff/文档/Chat/include"
+					"path" : "/home/jeff/文档/Chat/ChatServer/include"
 				},
 				{
 					"backtrace" : 4,
-					"path" : "/home/jeff/文档/Chat/include/server"
+					"path" : "/home/jeff/文档/Chat/ChatServer/include/server"
 				},
 				{
 					"backtrace" : 5,
-					"path" : "/home/jeff/文档/Chat/include/server/db"
+					"path" : "/home/jeff/文档/Chat/ChatServer/include/server/db"
 				},
 				{
 					"backtrace" : 6,
-					"path" : "/home/jeff/文档/Chat/include/server/model"
+					"path" : "/home/jeff/文档/Chat/ChatServer/include/server/model"
 				},
 				{
 					"backtrace" : 7,
-					"path" : "/home/jeff/文档/Chat/include/server/redis"
+					"path" : "/home/jeff/文档/Chat/ChatServer/include/server/redis"
 				},
 				{
 					"backtrace" : 8,
-					"path" : "/home/jeff/文档/Chat/thirdparty"
+					"path" : "/home/jeff/文档/Chat/ChatServer/thirdparty"
 				}
 			],
 			"language" : "CXX",
@@ -119,7 +119,7 @@
 		"commandFragments" : 
 		[
 			{
-				"fragment" : "-g -g",
+				"fragment" : "-g",
 				"role" : "flags"
 			},
 			{
