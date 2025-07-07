@@ -178,6 +178,7 @@ int main(int argc, char **argv)
 // 处理登录响应的业务逻辑
 void doLoginResponse(json &response_js)
 {
+    // std::cout << "Login response JSON: " << response_js.dump(4) << std::endl; // dump(4) 格式化输出，便于阅读
     if (response_js["errno"].get<int>() != 0) // 登录失败
     {
         cerr << response_js["errmsg"] << endl;
@@ -222,7 +223,9 @@ void doLoginResponse(json &response_js)
                 group.setName(group_js["groupname"]);
                 group.setDesc(group_js["groupdesc"]);
 
-                vector<string> vec2 = response_js["users"];
+                // 错误！！！！！vector<string> vec2 = response_js["users"];
+                // response_js是顶层JSON，没有"users"字段，此处应从group_js中读取
+                vector<string> vec2 = group_js["users"];
                 for (string &userstr : vec2)
                 {
                     json user_js = json::parse(userstr);
@@ -285,6 +288,7 @@ void readTaskHandler(int client_fd)
     for (;;)
     {
         char buffer[1024] = {0};
+        memset(&buffer, 0, sizeof(buffer));
         int bytes_recv = recv(client_fd, buffer, sizeof(buffer), 0); // 阻塞
         if (bytes_recv == -1 || bytes_recv == 0)
         {
@@ -294,6 +298,8 @@ void readTaskHandler(int client_fd)
 
         // 接收ChatServer转发的数据，反序列化生成json数据对象
         json js = json::parse(buffer);
+        std::cout << "Login response JSON: " << js.dump(4) << std::endl; // dump(4) 格式化输出，便于阅读
+
         int msgtype = js["msgid"].get<int>();
         if (msgtype == ONE_CHAT_MSG)
         {
@@ -478,6 +484,7 @@ void chat(int client_fd, string str)
         return;
     }
 }
+
 // "creategroup" command handler
 void creategroup(int client_fd, string str)
 {
