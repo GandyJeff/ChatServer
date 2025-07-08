@@ -32,14 +32,14 @@ ChatService::ChatService()
     if (_redis.connect())
     {
         // 设置上报消息的回调
-        // _redis.init_notify_handler(std::bind(&ChatService::handleRedisSubscribeMessage, this, _1, _2));
+        _redis.init_notify_handler(std::bind(&ChatService::handleRedisSubscribeMessage, this, _1, _2));
 
-        // 在 ChatService 初始化 Redis 回调时，替换为纯打印逻辑
-        _redis.init_notify_handler([this](int user_id, string msg)
-                                   {
-        // 仅打印消息，不做任何业务处理（如解析 JSON、操作容器等）
-        std::cout << "【纯打印】收到消息：user_id=" << user_id << ", msg=" << msg << std::endl;
-        std::cout << "【纯打印】消息长度：" << msg.size() << "字节，首字符：" << (msg.empty() ? ' ' : msg[0]) << std::endl; });
+        // // 在 ChatService 初始化 Redis 回调时，替换为纯打印逻辑
+        // _redis.init_notify_handler([this](int user_id, string msg)
+        //                            {
+        // // 仅打印消息，不做任何业务处理（如解析 JSON、操作容器等）
+        // std::cout << "【纯打印】收到消息：user_id=" << user_id << ", msg=" << msg << std::endl;
+        // std::cout << "【纯打印】消息长度：" << msg.size() << "字节，首字符：" << (msg.empty() ? ' ' : msg[0]) << std::endl; });
     }
 }
 
@@ -287,11 +287,11 @@ void ChatService::oneChat(const TcpConnectionPtr &conn, json &js, Timestamp time
     User user = _userModel.query(toId);
     if (user.getState() == "online")
     {
-        // 生成 JSON 字符串并打印（验证是否有效）
-        std::string json_str = js.dump();
-        std::cout << "准备发布到 Redis 的消息：" << json_str << std::endl;
-        std::cout << "消息长度:" << json_str.size() << " 字节" << std::endl;
-        std::cout << "消息前5个字符:" << json_str.substr(0, 5) << std::endl; // 确认开头是否为 '{'
+        // // 生成 JSON 字符串并打印（验证是否有效）
+        // std::string json_str = js.dump();
+        // std::cout << "准备发布到 Redis 的消息：" << json_str << std::endl;
+        // std::cout << "消息长度:" << json_str.size() << " 字节" << std::endl;
+        // std::cout << "消息前5个字符:" << json_str.substr(0, 5) << std::endl; // 确认开头是否为 '{'
 
         // 注意：Redis发布的是原始JSON字符串（不含长度前缀），
         // 接收方服务器从Redis订阅消息后，仍需按上述逻辑添加长度前缀再发送给客户端
@@ -377,29 +377,40 @@ void ChatService::groupChat(const TcpConnectionPtr &conn, json &js, Timestamp ti
 // 从redis消息队列中获取订阅的信息
 void ChatService::handleRedisSubscribeMessage(int user_id, string msg)
 {
-    std::cout << "订阅端接收到原始消息：" << msg << std::endl;
-    std::cout << "消息长度：" << msg.size() << " 字节" << std::endl;
-    std::cout << "消息前5个字符：" << msg.substr(0, 5) << std::endl;
+    // cout << "【接收方】从Redis订阅到消息：user_id=" << user_id << "，原始消息：" << msg << endl;
+    // cout << "【接收方】消息长度：" << msg.size() << "字节" << endl;
+
+    // ====== 步骤1：验证接收到的Redis消息是否为有效JSON ======
+    json js;
+    try
+    {
+        js = json::parse(msg); // 解析JSON，若失败直接丢弃
+        // cout << "【接收方】解析后的JSON：" << js.dump(4) << endl; // 格式化输出，确认结构正确
+    }
+    catch (const nlohmann::json::parse_error &e)
+    {
+        cerr << "Redis消息JSON解析失败：" << e.what() << "，原始消息：" << msg << endl;
+        return; // 忽略无效消息，避免转发给客户端导致错误
+    }
 
     lock_guard<mutex> lock(_connMutex);
     auto it = _userConnMap.find(user_id);
     if (it != _userConnMap.end())
     {
-        it->second->send(msg);
-        return;
-
-        // // 关键修改：调用通用发送函数，添加4字节长度前缀
-        // // (msg 是 JSON 字符串，需先解析为 json 对象，再传入 sendWithLengthPrefix)
-        // try
-        // {
-        //     json js = json::parse(msg);           // 将字符串解析为 JSON 对象
-        //     sendWithLengthPrefix(it->second, js); // 调用封装的发送函数（自动添加长度前缀）
-        // }
-        // catch (const nlohmann::json::parse_error &e)
-        // {
-        //     std::cerr << "Redis 消息解析 JSON 失败：" << e.what() << "，原始消息：" << msg << std::endl;
-        // }
+        // it->second->send(msg);
         // return;
+
+        // 关键修改：调用通用发送函数，添加4字节长度前缀
+        // (msg 是 JSON 字符串，需先解析为 json 对象，再传入 sendWithLengthPrefix)
+        try
+        {
+            sendWithLengthPrefix(it->second, js); // 调用封装的发送函数（自动添加长度前缀）
+        }
+        catch (const nlohmann::json::parse_error &e)
+        {
+            std::cerr << "Redis 消息解析 JSON 失败：" << e.what() << "，原始消息：" << msg << std::endl;
+        }
+        return;
     }
 
     // 存储该用户的离线消息，通道转发消息的过程中用户下线
@@ -412,6 +423,7 @@ void ChatService::sendWithLengthPrefix(const TcpConnectionPtr &conn, json &js)
     if (!conn || !conn->connected())
     {
         // 连接不存在或已断开，直接返回（避免崩溃）
+        cerr << "连接已断开，无法发送消息" << endl;
         return;
     }
 
