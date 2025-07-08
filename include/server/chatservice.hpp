@@ -65,6 +65,9 @@ public:
     // 从redis消息队列中获取订阅的信息
     void handleRedisSubscribeMessage(int, string);
 
+    // 通用发送函数：添加4字节长度前缀并发送JSON消息
+    void sendWithLengthPrefix(const TcpConnectionPtr &conn, json &js);
+
 private:
     // 构造函数私有化
     ChatService();

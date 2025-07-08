@@ -282,54 +282,96 @@ void doRegResponse(json &response_js)
     }
 }
 
+// 接收完整消息并返回解析后的JSON（核心函数）
+json recvMsg(int client_fd)
+{
+    // 步骤1：接收4字节长度前缀（网络字节序→本地字节序）
+    uint32_t len_net;
+    // recv(client_fd, &len_net, 4, 0); // 阻塞收长度
+
+    ssize_t n = 0;
+    while (n < 4)
+    { // 循环接收，确保收满4字节长度
+        ssize_t ret = recv(client_fd, (char *)&len_net + n, 4 - n, 0);
+        if (ret <= 0)
+        {
+            throw std::runtime_error("接收长度前缀失败");
+        }
+        n += ret;
+    }
+
+    uint32_t len = ntohl(len_net); // 得到JSON数据的实际长度
+
+    // 步骤2：按长度接收完整JSON数据（动态缓冲区，不依赖固定大小）
+    std::vector<char> buf(len);          // 动态缓冲区，刚好容纳完整数据
+    recv(client_fd, buf.data(), len, 0); // 阻塞收完整数据（循环收分包由OS底层处理）
+
+    // 步骤3：解析JSON（此时数据100%完整，无乱码）
+    return json::parse(std::string(buf.begin(), buf.end()));
+}
+
 // 接受线程
 void readTaskHandler(int client_fd)
 {
-    for (;;)
+    while (true)
     {
-        char buffer[1024] = {0};
-        memset(&buffer, 0, sizeof(buffer));
-        int bytes_recv = recv(client_fd, buffer, sizeof(buffer), 0); // 阻塞
-        if (bytes_recv == -1 || bytes_recv == 0)
+
+        try
         {
+            json js = recvMsg(client_fd); // 调用上面的核心函数
+            // std::cout << "接收线程收到消息：" << js.dump(4) << std::endl; // 打印完整JSON
+
+            int msgtype = js["msgid"].get<int>();
+            if (msgtype == ONE_CHAT_MSG)
+            {
+                cout << js["time"].get<string>() << " [" << js["id"] << "] " << js["name"].get<string>()
+                     << " said:" << js["msg"].get<string>() << endl;
+                continue;
+            }
+
+            if (msgtype == GROUP_CHAT_MSG)
+            {
+                cout << "群消息[" << js["group_id"].get<int>() << "]: " << js["time"].get<string>() << " [" << js["id"] << "] " << js["name"].get<string>()
+                     << " said:" << js["msg"].get<string>() << endl;
+                continue;
+            }
+
+            if (msgtype == LOGIN_MSG_ACK)
+            {
+
+                doLoginResponse(js); // 处理登录响应的业务逻辑
+                sem_post(&rwsem);    // 通知主线程，登录结果处理完成
+                continue;
+            }
+
+            if (msgtype == REG_MSG_ACK)
+            {
+
+                doRegResponse(js); // 处理注册响应的业务逻辑
+                sem_post(&rwsem);  // 通知主线程，注册结果处理完成
+                continue;
+            }
+        }
+        catch (const std::exception &e)
+        {
+            std::cerr << "接收线程异常：" << e.what() << std::endl; // 打印异常信息（如 "key 'msgid' not found"）
+            // 连接断开或解析失败，退出线程
             close(client_fd);
             exit(-1);
         }
 
-        // 接收ChatServer转发的数据，反序列化生成json数据对象
-        json js = json::parse(buffer);
-        std::cout << "Login response JSON: " << js.dump(4) << std::endl; // dump(4) 格式化输出，便于阅读
+        // char buffer[1024] = {0};
+        // memset(&buffer, 0, sizeof(buffer));
+        // int bytes_recv = recv(client_fd, buffer, sizeof(buffer), 0); // 阻塞
+        // if (bytes_recv == -1 || bytes_recv == 0)
+        // {
+        //     close(client_fd);
+        //     exit(-1);
+        // }
 
-        int msgtype = js["msgid"].get<int>();
-        if (msgtype == ONE_CHAT_MSG)
-        {
-            cout << js["time"].get<string>() << " [" << js["id"] << "] " << js["name"].get<string>()
-                 << " said:" << js["msg"].get<string>() << endl;
-            continue;
-        }
-
-        if (msgtype == GROUP_CHAT_MSG)
-        {
-            cout << "群消息[" << js["group_id"].get<int>() << "]: " << js["time"].get<string>() << " [" << js["id"] << "] " << js["name"].get<string>()
-                 << " said:" << js["msg"].get<string>() << endl;
-            continue;
-        }
-
-        if (msgtype == LOGIN_MSG_ACK)
-        {
-
-            doLoginResponse(js); // 处理登录响应的业务逻辑
-            sem_post(&rwsem);    // 通知主线程，登录结果处理完成
-            continue;
-        }
-
-        if (msgtype == REG_MSG_ACK)
-        {
-
-            doRegResponse(js); // 处理注册响应的业务逻辑
-            sem_post(&rwsem);  // 通知主线程，注册结果处理完成
-            continue;
-        }
+        // // 接收ChatServer转发的数据，反序列化生成json数据对象
+        // json js = json::parse(buffer);
+        // std::cout << "Login response JSON: " << js.dump(4) << std::endl; // dump(4) 格式化输出，便于阅读
     }
 }
 
@@ -577,6 +619,10 @@ void loginout(int client_fd, string str)
     {
         isMainMenuRunning = false;
     }
+
+    // 初始化
+    _currentUserFrientList.clear();
+    _currentUserGroupList.clear();
 }
 
 // 显示当前登录用户的基本信息

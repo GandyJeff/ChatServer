@@ -2,7 +2,9 @@
 #include "public.hpp"
 #include <muduo/base/Logging.h>
 #include <string>
+#include <cstring>
 #include <vector>
+#include <iostream>
 
 // 获取单例对象的接口函数
 ChatService *ChatService::instance()
@@ -30,7 +32,14 @@ ChatService::ChatService()
     if (_redis.connect())
     {
         // 设置上报消息的回调
-        _redis.init_notify_handler(std::bind(&ChatService::handleRedisSubscribeMessage, this, _1, _2));
+        // _redis.init_notify_handler(std::bind(&ChatService::handleRedisSubscribeMessage, this, _1, _2));
+
+        // 在 ChatService 初始化 Redis 回调时，替换为纯打印逻辑
+        _redis.init_notify_handler([this](int user_id, string msg)
+                                   {
+        // 仅打印消息，不做任何业务处理（如解析 JSON、操作容器等）
+        std::cout << "【纯打印】收到消息：user_id=" << user_id << ", msg=" << msg << std::endl;
+        std::cout << "【纯打印】消息长度：" << msg.size() << "字节，首字符：" << (msg.empty() ? ' ' : msg[0]) << std::endl; });
     }
 }
 
@@ -74,7 +83,10 @@ void ChatService::login(const TcpConnectionPtr &conn, json &js, Timestamp time)
             response["msgid"] = LOGIN_MSG_ACK;
             response["errno"] = 2;                                // 业务失败
             response["errmsg"] = "该账号已经登录,请输入其他账号"; // 业务失败
-            conn->send(response.dump());
+
+            // conn->send(response.dump());
+
+            sendWithLengthPrefix(conn, response);
         }
         else
         {
@@ -152,7 +164,9 @@ void ChatService::login(const TcpConnectionPtr &conn, json &js, Timestamp time)
                 response["groups"] = groupVec;
             }
 
-            conn->send(response.dump());
+            // conn->send(response.dump());
+
+            sendWithLengthPrefix(conn, response);
         }
     }
     else
@@ -162,7 +176,10 @@ void ChatService::login(const TcpConnectionPtr &conn, json &js, Timestamp time)
         response["msgid"] = LOGIN_MSG_ACK;
         response["errno"] = 1;                   // 业务失败
         response["errmsg"] = "用户名或密码错误"; // 业务失败
-        conn->send(response.dump());
+
+        // conn->send(response.dump());
+
+        sendWithLengthPrefix(conn, response);
     }
 }
 
@@ -183,7 +200,8 @@ void ChatService::reg(const TcpConnectionPtr &conn, json &js, Timestamp time)
         response["msgid"] = REG_MSG_ACK;
         response["errno"] = 0; // 业务成功
         response["id"] = user.getId();
-        conn->send(response.dump());
+        // conn->send(response.dump());
+        sendWithLengthPrefix(conn, response);
     }
     else
     {
@@ -191,7 +209,8 @@ void ChatService::reg(const TcpConnectionPtr &conn, json &js, Timestamp time)
         json response;
         response["msgid"] = REG_MSG_ACK;
         response["errno"] = 1; // 业务失败
-        conn->send(response.dump());
+        // conn->send(response.dump());
+        sendWithLengthPrefix(conn, response);
     }
 }
 
@@ -256,21 +275,31 @@ void ChatService::oneChat(const TcpConnectionPtr &conn, json &js, Timestamp time
         auto it = _userConnMap.find(toId);
         if (it != _userConnMap.end())
         {
-            // toId不在线，存储离线消息
-            it->second->send(js.dump());
+            // it->second->send(js.dump());
+            // return;
+
+            sendWithLengthPrefix(it->second, js);
             return;
         }
     }
 
-    // 查询toid是否在线
+    // 查询toid是否在线(通过Redis跨服务器通信场景)
     User user = _userModel.query(toId);
     if (user.getState() == "online")
     {
+        // 生成 JSON 字符串并打印（验证是否有效）
+        std::string json_str = js.dump();
+        std::cout << "准备发布到 Redis 的消息：" << json_str << std::endl;
+        std::cout << "消息长度:" << json_str.size() << " 字节" << std::endl;
+        std::cout << "消息前5个字符:" << json_str.substr(0, 5) << std::endl; // 确认开头是否为 '{'
+
+        // 注意：Redis发布的是原始JSON字符串（不含长度前缀），
+        // 接收方服务器从Redis订阅消息后，仍需按上述逻辑添加长度前缀再发送给客户端
         _redis.publish(toId, js.dump());
         return;
     }
 
-    // toId不在线，离线消息
+    // toId不在线，离线消息(存储原始JSON字符串，用户上线时添加长度前缀发送)
     _offlineMsgModel.insert(toId, js.dump());
 }
 
@@ -323,7 +352,9 @@ void ChatService::groupChat(const TcpConnectionPtr &conn, json &js, Timestamp ti
         if (it != _userConnMap.end())
         {
             // 转发消息
-            it->second->send(js.dump());
+            // it->second->send(js.dump());
+
+            sendWithLengthPrefix(it->second, js);
         }
         else
         {
@@ -346,14 +377,64 @@ void ChatService::groupChat(const TcpConnectionPtr &conn, json &js, Timestamp ti
 // 从redis消息队列中获取订阅的信息
 void ChatService::handleRedisSubscribeMessage(int user_id, string msg)
 {
+    std::cout << "订阅端接收到原始消息：" << msg << std::endl;
+    std::cout << "消息长度：" << msg.size() << " 字节" << std::endl;
+    std::cout << "消息前5个字符：" << msg.substr(0, 5) << std::endl;
+
     lock_guard<mutex> lock(_connMutex);
     auto it = _userConnMap.find(user_id);
     if (it != _userConnMap.end())
     {
         it->second->send(msg);
         return;
+
+        // // 关键修改：调用通用发送函数，添加4字节长度前缀
+        // // (msg 是 JSON 字符串，需先解析为 json 对象，再传入 sendWithLengthPrefix)
+        // try
+        // {
+        //     json js = json::parse(msg);           // 将字符串解析为 JSON 对象
+        //     sendWithLengthPrefix(it->second, js); // 调用封装的发送函数（自动添加长度前缀）
+        // }
+        // catch (const nlohmann::json::parse_error &e)
+        // {
+        //     std::cerr << "Redis 消息解析 JSON 失败：" << e.what() << "，原始消息：" << msg << std::endl;
+        // }
+        // return;
     }
 
     // 存储该用户的离线消息，通道转发消息的过程中用户下线
     _offlineMsgModel.insert(user_id, msg);
+}
+
+// 通用发送函数：添加4字节长度前缀并发送JSON消息
+void ChatService::sendWithLengthPrefix(const TcpConnectionPtr &conn, json &js)
+{
+    if (!conn || !conn->connected())
+    {
+        // 连接不存在或已断开，直接返回（避免崩溃）
+        return;
+    }
+
+    try
+    {
+        // 1. 将JSON对象转为字符串
+        std::string json_str = js.dump();
+
+        // 2. 计算JSON长度（转为网络字节序：4字节无符号整数）
+        uint32_t len = htonl(json_str.size()); // 本地字节序→网络字节序（大端）
+
+        // 3. 拼接“4字节长度前缀 + JSON数据”
+        std::string send_data;
+        send_data.resize(4);            // 预留4字节存储长度前缀
+        memcpy(&send_data[0], &len, 4); // 将长度写入前4字节
+        send_data += json_str;          // 拼接JSON字符串
+
+        // 4. 通过TcpConnection发送完整数据
+        conn->send(send_data);
+    }
+    catch (const std::exception &e)
+    {
+        // 捕获JSON序列化或内存操作异常（如json_str过大）
+        std::cerr << "发送消息失败：" << e.what() << std::endl;
+    }
 }
